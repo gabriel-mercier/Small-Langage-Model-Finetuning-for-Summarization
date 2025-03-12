@@ -72,7 +72,7 @@ generation_config.do_sample = True
 print_trainable_parameters(model)
 
 def preprocess_function(examples):
-    model_inputs = tokenizer(examples["text"], padding="max_length", max_length=2000, truncation=True)
+    model_inputs = tokenizer(examples["text"], padding="max_length", max_length=2500, truncation=True)
     labels = tokenizer(examples["summary"], padding="max_length", max_length=150, truncation=True)
 
     model_inputs["labels"] = labels["input_ids"]
@@ -109,8 +109,8 @@ training_args = transformers.TrainingArguments(
 
 trainer = transformers.Trainer(
     model=model,
-    train_dataset=dataset_train.select(range(10)),
-    eval_dataset=dataset_val.select(range(5)),
+    train_dataset=dataset_train,
+    eval_dataset=dataset_val,
     args=training_args,
     data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model),
 )
@@ -118,9 +118,9 @@ trainer = transformers.Trainer(
 
 trainer.train()
 
-trainer.save_model("./t5_full")
+trainer.save_model("./mt5")
 
-dataset_test = dataset_split['test'].select(range(5))
+dataset_test = dataset_split['test']
 
 rouge = evaluate.load("rouge")
 bert_score = evaluate.load("bertscore")
@@ -169,7 +169,7 @@ results_finetune = {
     "bert": bert_results_finetune
 }
 
-with open("t5_evaluation_results_finetune_full.json", "w") as f:
+with open("mt5_evaluation_results_finetune.json", "w") as f:
     json.dump(results_finetune, f, indent=4)
 
 
@@ -180,5 +180,5 @@ results_raw = {
     "bert": bert_results_raw
 }
 
-with open("t5_evaluation_results_raw_full.json", "w") as f:
+with open("mt5_evaluation_results_raw.json", "w") as f:
     json.dump(results_raw, f, indent=4)
