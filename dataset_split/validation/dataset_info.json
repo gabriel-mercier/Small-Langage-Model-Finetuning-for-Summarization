@@ -1,0 +1,42 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "json",
+  "dataset_size": 20552650,
+  "description": "",
+  "download_checksums": {
+    "/users/eleves-b/2022/gabriel.mercier/INF_CV/slm_finetuning/dataset_llm_generated.json": {
+      "num_bytes": 23426603,
+      "checksum": null
+    }
+  },
+  "download_size": 23426603,
+  "features": {
+    "text": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "summary": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 43979253,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 20552650,
+      "num_examples": 5000,
+      "dataset_name": "json"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
