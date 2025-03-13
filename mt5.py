@@ -12,9 +12,11 @@ from tqdm import tqdm
 
 import numpy as np
 import json
+import time
 
 
 lora_finetune = True
+r = 8
 
 dataset_split = load_from_disk('dataset_split')
 
@@ -22,7 +24,7 @@ print(dataset_split)
 
 cache_dir = "/Data/gabriel-mercier/slm_models"
 
-tokenizer = AutoTokenizer.from_pretrained("google/mt5-base", cache_dir=cache_dir)
+tokenizer = AutoTokenizer.from_pretrained("google-t5/t5-base", cache_dir=cache_dir)
 
 bnb_config = BitsAndBytesConfig(load_in_4bit=True, 
                                 bnb_4bit_use_double_quant=True,
@@ -30,13 +32,13 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True,
                                 bnb_4bit_quant_type='nf4',
                             )
 if lora_finetune:
-    model_raw = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-base", 
+    model_raw = AutoModelForSeq2SeqLM.from_pretrained("google-t5/t5-base", 
                                               cache_dir=cache_dir,
                                               trust_remote_code=True,
                                               quantization_config=bnb_config,
                                               device_map="auto")
 else:
-    model_raw = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-base",
+    model_raw = AutoModelForSeq2SeqLM.from_pretrained("google-t5/t5-base",
                                           cache_dir=cache_dir,
                                           trust_remote_code=True,
                                           device_map="auto")
@@ -44,8 +46,8 @@ else:
 
 
 if lora_finetune:
-    lora_config = LoraConfig(r=16, 
-                            lora_alpha=32,
+    lora_config = LoraConfig(r=r, 
+                            lora_alpha=2*r,
                             target_modules=["q", "k", "v", "o"],
                             lora_dropout=0.05,
                             bias='none',
@@ -69,7 +71,7 @@ generation_config.pad_token_id = tokenizer.eos_token_id
 generation_config.eos_token_id = tokenizer.eos_token_id
 generation_config.do_sample = True
 
-print_trainable_parameters(model)
+perc_param = print_trainable_parameters(model)
 
 def preprocess_function(examples):
     model_inputs = tokenizer(examples["text"], padding="max_length", max_length=2500, truncation=True)
@@ -116,9 +118,22 @@ trainer = transformers.Trainer(
 )
 
 
+start_time = time.time()
 trainer.train()
+end_training = time.time()
 
-trainer.save_model("./mt5")
+trainer.save_model(f"./t5_r{r}")
+
+logs = trainer.state.log_history
+train_losses = [log["loss"] for log in logs if "loss" in log]
+eval_losses = [log["eval_loss"] for log in logs if "eval_loss" in log]
+
+with open(f"./t5_r{r}_infos.json", "w") as f:
+    json.dump({"train_losses": train_losses, "eval_losses": eval_losses, "perc_training":perc_param, "time_training":end_training-start_time}, f)
+
+
+model = AutoModelForSeq2SeqLM.from_pretrained(f"./t5_r{r}")
+model.to(device)
 
 dataset_test = dataset_split['test']
 
@@ -169,16 +184,16 @@ results_finetune = {
     "bert": bert_results_finetune
 }
 
-with open("mt5_evaluation_results_finetune.json", "w") as f:
+with open(f"t5_evaluation_results_finetune_r{r}.json", "w") as f:
     json.dump(results_finetune, f, indent=4)
 
 
-rouges_results_raw, bert_results_raw = evaluate_model(model_raw, dataset_test)
+'''rouges_results_raw, bert_results_raw = evaluate_model(model_raw, dataset_test)
 
 results_raw = {
     "rouge": rouges_results_raw,
     "bert": bert_results_raw
 }
 
-with open("mt5_evaluation_results_raw.json", "w") as f:
-    json.dump(results_raw, f, indent=4)
+with open("t5_evaluation_results_raw.json", "w") as f:
+    json.dump(results_raw, f, indent=4)'''
