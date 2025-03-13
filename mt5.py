@@ -16,7 +16,7 @@ import time
 
 
 lora_finetune = True
-r = 8
+r = 128
 
 dataset_split = load_from_disk('dataset_split')
 
