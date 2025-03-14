@@ -10,6 +10,7 @@ import json
 import time
 
 r = 128
+model_name = "t5-base" # "mt5-base"
 
 # Load dataset
 dataset_split = load_from_disk('dataset_split')
@@ -19,7 +20,12 @@ print(dataset_split)
 cache_dir = "/Data/gabriel-mercier/slm_models"
 
 # Load tokenizer
-tokenizer = AutoTokenizer.from_pretrained("google-t5/t5-base", cache_dir=cache_dir)
+if model_name == "t5-base":
+    final_name = "google-t5/t5-base"
+elif model_name == "mt5-base":
+    final_name = "google/mt5-base"
+
+tokenizer = AutoTokenizer.from_pretrained(final_name, cache_dir=cache_dir)
 
 # Configure BitsAndBytes
 bnb_config = BitsAndBytesConfig(load_in_4bit=True, 
@@ -29,12 +35,11 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True,
                             )
 
 # Load model
-model_raw = AutoModelForSeq2SeqLM.from_pretrained("google-t5/t5-base", 
+model_raw = AutoModelForSeq2SeqLM.from_pretrained(final_name, 
                                               cache_dir=cache_dir,
                                               trust_remote_code=True,
                                               quantization_config=bnb_config,
                                               device_map="auto")
-print(model_raw)
 
 # Configure LoRA
 lora_config = LoraConfig(r=r, 
