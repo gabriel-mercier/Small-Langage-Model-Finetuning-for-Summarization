@@ -1,56 +1,49 @@
-from transformers import AutoModelForSeq2SeqLM
 import torch
-from datasets import load_dataset, DatasetDict
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, TrainingArguments, Trainer
 from peft import LoraConfig, get_peft_model
-import evaluate
-from transformers import AutoModelForSeq2SeqLM
-from peft import LoraConfig, get_peft_model
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-import torch
-import matplotlib.pyplot as plt
-from transformers import DataCollatorForLanguageModeling
-from datasets import load_dataset
-from datasets import DatasetDict
-import os
-from utils import prepare_prompt
-from transformers import DataCollatorForSeq2Seq
+from transformers import DataCollatorForSeq2Seq, AutoTokenizer, BitsAndBytesConfig, AutoModelForCausalLM
+from datasets import load_from_disk
+
+from utils import print_trainable_parameters, evaluate_model, prepare_prompt
 import transformers
-from tqdm import tqdm
-import numpy as np
 
+import json
+import time
 
-dataset_raw = load_dataset('json', data_files='dataset_llm_generated.json')
-dataset = dataset_raw.select_columns(["text", "summary"])
-
-print(dataset)
-
-split_train_temp = dataset["train"].train_test_split(test_size=0.4, seed=42)
-
-split_valid_test = split_train_temp["test"].train_test_split(test_size=0.5, seed=42)
-
-dataset_split = DatasetDict({
-    "train": split_train_temp["train"],        
-    "validation": split_valid_test["train"],      
-    "test": split_valid_test["test"]              
-})
-
-print(dataset_split)
-
-max_length = 2500
-
-dataset_test = dataset_split['test'].filter(lambda x: len(x['text'].split()) <= max_length)
+# Load dataset
+dataset_split = load_from_disk('dataset_split')
 
 slm_name = "Qwen/Qwen2.5-0.5B-Instruct"
 tokenizer_slm = AutoTokenizer.from_pretrained(slm_name, cache_dir="/Data/gabriel-mercier/slm_models", padding_side="left")
 tokenizer_slm.pad_token = tokenizer_slm.eos_token
 
-
 device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
 print(f'device : {device}')
-model = AutoModelForCausalLM.from_pretrained("./autoregressive_model")
-model.to(device)
+bnb_config = BitsAndBytesConfig(load_in_4bit=True, 
+                                bnb_4bit_use_double_quant=True,
+                                bnb_4bit_compute_dtype=torch.bfloat16,
+                                bnb_4bit_quant_type='nf4',
+                            )
+model_raw = AutoModelForCausalLM.from_pretrained(
+    slm_name,
+    cache_dir="/Data/gabriel-mercier/slm_models",
+    trust_remote_code=True,
+    quantization_config=bnb_config,
+    device_map="auto"   
+)
+
+lora_config = LoraConfig(r=16, 
+                        lora_alpha=32,
+                        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+                        lora_dropout=0.05,
+                        bias='none',
+                        task_type="CAUSAL_LM")
+
+model = get_peft_model(model_raw, lora_config)
+    
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
+
+perc_param = print_trainable_parameters(model)
 
 generation_config = model.generation_config
 generation_config.max_new_tokens = 200
@@ -61,75 +54,99 @@ generation_config.pad_token_id = tokenizer_slm.eos_token_id
 generation_config.eos_token_id = tokenizer_slm.eos_token_id
 generation_config.do_sample = True
 
-
-
-rouge = evaluate.load("rouge")
-bert_score = evaluate.load("bertscore")
-
-assistant_start = "Résumé concis et structuré (100 mots maximum) :"
-
-
-def evaluate_model(model, dataset):
-    summaries = [data_point['summary'] for data_point in dataset]
-    predictions = []
-
-    for data_point in tqdm(dataset):
-        prompt = prepare_prompt(data_point, summary_included=False)
-        encoding = tokenizer_slm(prompt, return_tensors="pt").to(device)
-        with torch.inference_mode():
-            output = model.generate(
-                input_ids=encoding.input_ids,
-                attention_mask=encoding.attention_mask,
-                generation_config=generation_config,
-            )
-            
-        prediction = tokenizer_slm.decode(output[0], skip_special_tokens=True)
-        response_start = prediction.find(assistant_start)
-        # print(f"response start {response_start}")
-        predictions.append(prediction[response_start:])
-    # print(f"predictions {predictions}")
-    rouge_results = rouge.compute(predictions=predictions, references=summaries)
-    bert_results = bert_score.compute(predictions=predictions, references=summaries, lang="fr")
-
-    # Moyenne des scores sur toutes les phrases
-    bert_precision = np.mean(bert_results['precision'])
-    bert_recall = np.mean(bert_results['recall'])
-    bert_f1 = np.mean(bert_results['f1'])
-
-    print(f"BERTScore - Precision: {bert_precision:.4f}, Recall: {bert_recall:.4f}, F1: {bert_f1:.4f}")
-    print(f"ROUGEScores - {rouge_results}")
-    print('\n')
+# Preprocess function
+def generate_and_tokenize_prompt(data_point):
+    full_prompt = prepare_prompt(data_point)+tokenizer_slm.eos_token 
+    tokenized_full_prompt = tokenizer_slm(full_prompt, return_tensors='pt')
+    labels = tokenized_full_prompt.input_ids.clone() 
     
-    return rouge_results, {'Precision':bert_precision, 'Recall':bert_recall, 'F1':bert_f1}
+    assistant_token = tokenizer_slm("Résumé concis et structuré", return_tensors='pt')['input_ids'][0]
+   
+    complement_token = tokenizer_slm("(100 mots maximum) :", return_tensors='pt')['input_ids'][0]
+    
+    T = tokenized_full_prompt['input_ids'].flatten()
+    S = assistant_token.flatten()
+    
+    for i in range(len(T) - len(S) + 1):
+        if torch.equal(T[i:i+len(S)], S):
+            end_prompt_idx = i+len(S)   
+    
+    labels[:, :end_prompt_idx+len(complement_token)] = -100
+    
+
+    return {
+        'input_ids': tokenized_full_prompt.input_ids.flatten(),
+        'labels': labels.flatten(),
+        'attention_mask': tokenized_full_prompt.attention_mask.flatten(),
+    }
+
+dataset_train = dataset_split["train"].shuffle(seed=42).map(generate_and_tokenize_prompt)
+dataset_val = dataset_split["validation"].shuffle(seed=42).map(generate_and_tokenize_prompt)
+dataset_test = dataset_split["test"]
+
+dataset_train = dataset_train.remove_columns(["text", "summary"])
+dataset_val = dataset_val.remove_columns(["text", "summary"])
+
+# Training arguments
+training_args = transformers.TrainingArguments(
+    per_device_train_batch_size=1,
+    per_device_eval_batch_size=1,
+    gradient_accumulation_steps=4,
+    num_train_epochs=3,
+    learning_rate=2e-4,
+    bf16=True,
+    save_total_limit=3,
+    logging_steps=1,
+    evaluation_strategy="epoch",
+    optim="paged_adamw_8bit",
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.05,
+)
+
+# Trainer setup
+trainer = transformers.Trainer(
+    model=model,
+    train_dataset=dataset_train,
+    eval_dataset=dataset_val,
+    args=training_args,
+    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer_slm, model=model),
+)
+
+# Train model
+start_time = time.time()
+trainer.train()
+end_training = time.time()
+
+# Log training information
+logs = trainer.state.log_history
+train_losses = [log["loss"] for log in logs if "loss" in log]
+eval_losses = [log["eval_loss"] for log in logs if "eval_loss" in log]
+
+with open(f"./qwen_infos.json", "w") as f:
+    json.dump({"train_losses": train_losses, "eval_losses": eval_losses, "perc_training":perc_param, "time_training":end_training-start_time}, f)
 
 
-rouges_results, bert_results = evaluate_model(model, dataset_test)
-
-
-import json
-
+# Evaluate fine-tuned model
+rouges_results, bert_results = evaluate_model(model, dataset_test, tokenizer_slm, device, generation_config)
 results = {
     "rouge": rouges_results,
     "bert": bert_results
 }
-
 with open("evaluation_results_finetune.json", "w") as f:
     json.dump(results, f, indent=4)
 
 
+# Evaluate raw model
 model_raw = AutoModelForCausalLM.from_pretrained(
     slm_name,
     cache_dir="/Data/gabriel-mercier/slm_models",
 )
 model_raw.to(device)
 
-
 rouges_results_raw, bert_results_raw = evaluate_model(model_raw, dataset_test)
-
 results_raw = {
     "rouge": rouges_results_raw,
     "bert": bert_results_raw
 }
-
 with open("evaluation_results_raw.json", "w") as f:
     json.dump(results_raw, f, indent=4)
