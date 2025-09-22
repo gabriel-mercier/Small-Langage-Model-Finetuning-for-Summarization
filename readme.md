@@ -3,7 +3,7 @@ Gabriel Mercier & Ayoub Melliti
 
 ### Written report
 
-- [Small_Language_Model_Finetuning_for_Summarization.pdf](./Small_Language_Model_Finetuning_for_Summarization.pdf)
+- [Small_Language_Model_Finetuning_for_Summarization.pdf](Small_Langage_Model_Finetuning_for_Summarization.pdf)
 
 End-to-end pipeline to generate a French summarization dataset with Qwen2.5-32B-Instruct, then fine-tune lightweight models (T5-base, mT5-base, Qwen-0.5B) using LoRA (4-bit quantization, r = 8–128). We compare decoder-only vs encoder–decoder architectures, analyze LoRA rank/target layers, and report ROUGE and BERTScore improvements within ≤ 16 GB VRAM.
 
